@@ -2,6 +2,9 @@
 
 namespace Drupal\dut_views\Plugin\views\display_extender;
 
+use Drupal\Component\Utility\Html;
+use Drupal\Core\Link;
+use Drupal\Core\Url;
 use Drupal\views\Views;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\views\Plugin\views\display_extender\DisplayExtenderPluginBase;
@@ -20,6 +23,15 @@ use Drupal\views\Plugin\views\display_extender\DisplayExtenderPluginBase;
  */
 class ThemeSuggestionsDisplayExtender extends DisplayExtenderPluginBase {
 
+  // @todo: add fields.
+  protected $pluginTypes = [
+    'display' => ['Display output', 'Alternative display output'],
+    'style'  => ['Style output', 'Alternative style'],
+    'row' => ['Row style output', 'Alternative row style'],
+  ];
+
+  protected $theme;
+
   /**
    * {@inheritdoc}
    */
@@ -34,21 +46,22 @@ class ThemeSuggestionsDisplayExtender extends DisplayExtenderPluginBase {
 
   public function buildOptionsForm(&$form, FormStateInterface $form_state) {
     $section = $form_state->get('section');
+
+    // @todo: via DI.
+    if (isset($_POST['ajax_page_state']['theme'])) {
+      $this->theme = $_POST['ajax_page_state']['theme'];
+    }
+    elseif (empty($this->theme)) {
+      // @todo: via DI.
+      $this->theme = $config = \Drupal::config('system.theme')->get('default');
+    }
+
     switch ($section) {
       case 'theme_suggestions':
         // Get a list of available themes
         $theme_handler = \Drupal::service('theme_handler');
         $themes = $theme_handler->listInfo();
         $form['#title'] .= $this->t('Theming information');
-
-        // @todo: via DI.
-        if (isset($_POST['ajax_page_state']['theme'])) {
-          $this->theme = $_POST['ajax_page_state']['theme'];
-        }
-        elseif (empty($this->theme)) {
-          // @todo: via DI.
-          $this->theme = $config = \Drupal::config('system.theme')->get('default');
-        }
 
         /** @var \Drupal\Core\Theme\ActiveTheme $active_theme */
         $active_theme = \Drupal::theme()->getActiveTheme();
@@ -69,22 +82,8 @@ class ThemeSuggestionsDisplayExtender extends DisplayExtenderPluginBase {
         }
 
         $suggestions_list = [];
-        // @todo: add fields.
-        $plugin_types = [
-          'display' => ['Display output', 'Alternative display output'],
-          'style'  => ['Style output', 'Alternative style'],
-          'row' => ['Row style output', 'Alternative row style'],
-        ];
-        $display_plugin_id = $this->displayHandler->getPluginId();
-        foreach (array_keys($plugin_types) as $plugin_type) {
-          $definitions = Views::pluginManager($plugin_type)->getDefinitions();
-
-          $definition = !empty($definitions[$display_plugin_id])
-            ? $definitions[$display_plugin_id]
-            : [];
-          $display_theme = !empty($definition['theme'])
-            ? $definition['theme']
-            : NULL;
+        foreach (array_keys($this->pluginTypes) as $plugin_type) {
+          list($definition, $display_theme) = $this->getPluginDefinitions($plugin_type);
           // Get theme functions for the display. Note that some displays may
           // not have themes. The 'feed' display, for example, completely
           // delegates to the style.
@@ -92,31 +91,17 @@ class ThemeSuggestionsDisplayExtender extends DisplayExtenderPluginBase {
             continue;
           }
 
-          // $plugin_type !== display.
-          if (empty($definition)) {
-            $display_options = $this->displayHandler->options;
-            $display_plugin_id = !empty($display_options[$plugin_type]['type'])
-              ? $display_options[$plugin_type]['type']
-              : NULL;
-            $definition = !empty($display_plugin_id)
-              ? $definitions[$display_plugin_id]
-              : [];
-            $display_theme = !empty($definition) ? $definition['theme'] : NULL;
-          }
-
           if (empty($display_theme)) {
             continue;
           }
 
-          $group = $plugin_types[$plugin_type][0];
           $suggestions = $this->view->buildThemeFunctions($display_theme);
-          $suggestions_list[$group][] = $this->format_themes($suggestions);
+          $suggestions_list[] = $this->buildSuggestionGroup($plugin_type, $suggestions, 0);
 
           $additional_suggestions = !empty($definition['additional themes']) ? $definition['additional themes'] : [];
           foreach ($additional_suggestions as $theme => $type) {
-            $group = $plugin_types[$plugin_type][1];
             $suggestions = $this->view->buildThemeFunctions($theme);
-            $suggestions_list[$group][] = $this->format_themes($suggestions);
+            $suggestions_list[] = $this->buildSuggestionGroup($plugin_type, $suggestions, 1);
           }
         }
 
@@ -135,13 +120,91 @@ class ThemeSuggestionsDisplayExtender extends DisplayExtenderPluginBase {
           '#suggestions' => $suggestions_list,
         ];
         break;
+
+      case 'theme_suggestions__display':
+      case 'theme_suggestions__style':
+      case 'theme_suggestions__row':
+        list($plugin_id, $plugin_type) = explode('__', $section);
+        $form['#title'] .= t('Theming information (@plugin_type)', ['@plugin_type' => $plugin_type]);
+        $back_link = Link::fromTextAndUrl(t('Theming information'), $this->createFormDisplayRouteLink($plugin_id));
+        $theme_registry = theme_get_registry();
+        list($definition, $display_theme) = $this->getPluginDefinitions($plugin_type);
+        $contents = [];
+
+        if (!empty($definition['theme'])) {
+          $theme = $theme_registry[$definition['theme']];
+          $content = file_get_contents('./' . $theme['path'] . '/' . strtr($theme['template'], '_', '-') . '.html.twig');
+          $contents[] = [
+            'additional' => FALSE,
+            'content' => Html::escape($content),
+          ];
+        }
+
+        if (!empty($definition['additional themes'])) {
+          foreach ($definition['additional themes'] as $theme => $type) {
+            $content = file_get_contents('./' . $theme['path'] . '/' . strtr($theme, '_', '-') . '.html.twig');
+            $contents[] = [
+              'additional' => TRUE,
+              'content' => Html::escape($content),
+            ];
+          }
+        }
+
+        $form['analysis'] = array(
+          '#theme' => 'views_view_theme_suggestion_theme_template',
+          '#type' => $plugin_type,
+          '#link' => $back_link,
+          '#contents' => $contents,
+        );
+        break;
     }
+  }
+
+  protected function getPluginDefinitions($plugin_type) {
+    $definitions = Views::pluginManager($plugin_type)->getDefinitions();
+    $display_plugin_id = $plugin_type === 'display'
+      ? $this->displayHandler->getPluginId()
+      : $this->displayHandler->options[$plugin_type]['type'];
+    $definition = !empty($definitions[$display_plugin_id])
+      ? $definitions[$display_plugin_id]
+      : [];
+    $display_theme = !empty($definition['theme'])
+      ? $definition['theme']
+      : NULL;
+
+    return [$definition, $display_theme];
+  }
+
+  protected function buildSuggestionGroup($plugin_type, $suggestions, $title_delta) {
+    $group = $this->pluginTypes[$plugin_type][$title_delta];
+    $type = implode('__', [$this->getBaseId(), $plugin_type]);
+    $group_link = Link::fromTextAndUrl(t($group), $this->createFormDisplayRouteLink($type));
+
+    return [
+      '#theme' => 'views_view_theme_suggestion',
+      '#type' => $plugin_type,
+      '#link' => $group_link,
+      '#suggestions' => $this->formatThemes($suggestions),
+    ];
+  }
+
+  protected function createFormDisplayRouteLink($type, $js = 'nojs') {
+    $route = 'views_ui.form_display';
+    $options = ['attributes' => ['class' => 'views-ajax-link']];
+
+    return Url::fromRoute($route, [
+      'js' => $js,
+      'view' => $this->view->id(),
+      'display_id' => $this->view->display_handler->display['id'],
+      'type' => $type,
+    ], $options);
   }
 
   /**
    * Format a list of theme templates for output by the theme info helper.
    */
-  function format_themes($themes) {
+  protected function formatThemes($themes) {
+    $fixed = [];
     $registry = $this->theme_registry;
     $extension = $this->theme_extension;
 

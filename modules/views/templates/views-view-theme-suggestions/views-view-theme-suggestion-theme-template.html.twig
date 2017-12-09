@@ -1,0 +1,15 @@
+<div class="form-item">
+  <p>{{ 'Back to'|t }} {{ link }}</p>
+  {% if contents|length > 0 %}
+    {% for item in contents %}
+      {% set message = item.additional
+          ? 'This is an alternative template for this @plugin_type.'
+          : 'This is the default theme template used for this @plugin_type.'
+      %}
+      <p>{{ message|t({'@plugin_type': type}) }}</p>
+      <pre>{{ item.content|raw }}</pre>
+    {% endfor %}
+  {% else %}
+    {{ 'This display has no @plugin_type theming information'|t({'@plugin_type': type}) }}
+  {% endif %}
+</div>
