@@ -4,6 +4,7 @@ namespace Drupal\dut_views\Plugin\views\display_extender;
 
 use Drupal\Component\Utility\Html;
 use Drupal\Core\Link;
+use Drupal\Core\Theme\Registry;
 use Drupal\Core\Url;
 use Drupal\views\Views;
 use Drupal\Core\Form\FormStateInterface;
@@ -36,32 +37,34 @@ class ThemeSuggestionsDisplayExtender extends DisplayExtenderPluginBase {
    * {@inheritdoc}
    */
   public function optionsSummary(&$categories, &$options) {
-    $options['theme_suggestions'] = array(
+    $options['theme_suggestions'] = [
       'category' => 'other',
       'title' => $this->t('Theme'),
       'value' => $this->t('Information'),
       'desc' => $this->t('Get information on how to theme this display'),
-    );
+    ];
   }
 
   public function buildOptionsForm(&$form, FormStateInterface $form_state) {
     $section = $form_state->get('section');
+    $storage = $form_state->getStorage();
 
     // @todo: via DI.
-    if (isset($_POST['ajax_page_state']['theme'])) {
-      $this->theme = $_POST['ajax_page_state']['theme'];
+    if (isset($_POST['theme'])) {
+      $this->theme = $_POST['theme'];
     }
     elseif (empty($this->theme)) {
       // @todo: via DI.
       $this->theme = $config = \Drupal::config('system.theme')->get('default');
     }
 
+    $form_state->set('ok_button', TRUE);
     switch ($section) {
       case 'theme_suggestions':
-        // Get a list of available themes
+        $form['#title'] .= $this->t('Theming information');
+
         $theme_handler = \Drupal::service('theme_handler');
         $themes = $theme_handler->listInfo();
-        $form['#title'] .= $this->t('Theming information');
 
         /** @var \Drupal\Core\Theme\ActiveTheme $active_theme */
         $active_theme = \Drupal::theme()->getActiveTheme();
@@ -69,7 +72,55 @@ class ThemeSuggestionsDisplayExtender extends DisplayExtenderPluginBase {
           $this->theme_registry = theme_get_registry();
           $theme_engine = $active_theme->getEngine();
         }
-        // @todo: add 'else' condition.
+        else {
+          // Get a list of available themes
+          $theme = $themes[$this->theme];
+
+          // Find all our ancestor themes and put them in an array.
+          $base_theme = [];
+          $ancestor = $this->theme;
+          while ($ancestor && isset($themes[$ancestor]->base_theme)) {
+            $ancestor = $themes[$ancestor]->base_theme;
+            $base_theme[] = $themes[$ancestor];
+          }
+
+          // The base themes should be initialized in the right order.
+          $base_theme = array_reverse($base_theme);
+
+          // This code is copied directly from _drupal_theme_initialize()
+          $theme_engine = NULL;
+
+          // Initialize the theme.
+          if (isset($theme->engine)) {
+            // Include the engine.
+            include_once DRUPAL_ROOT . '/' . $theme->owner;
+
+            $theme_engine = $theme->engine;
+            if (function_exists($theme_engine . '_init')) {
+              foreach ($base_theme as $base) {
+                call_user_func($theme_engine . '_init', $base);
+              }
+              call_user_func($theme_engine . '_init', $theme);
+            }
+          }
+          else {
+            // include non-engine theme files
+            foreach ($base_theme as $base) {
+              // Include the theme file or the engine.
+              if (!empty($base->owner)) {
+                include_once DRUPAL_ROOT . '/' . $base->owner;
+              }
+            }
+            // and our theme gets one too.
+            if (!empty($theme->owner)) {
+              include_once DRUPAL_ROOT . '/' . $theme->owner;
+            }
+          }
+          $registry = new Registry(\Drupal::root(), \Drupal::cache(), \Drupal::lock(), \Drupal::moduleHandler(), \Drupal::service('theme_handler'), \Drupal::service('theme.initialization'), $this->theme);
+          $registry->setThemeManager(\Drupal::theme());
+
+          $this->theme_registry = $registry->get();
+        }
 
         // If there's a theme engine involved, we also need to know its extension
         // so we can give the proper filename.
@@ -106,18 +157,59 @@ class ThemeSuggestionsDisplayExtender extends DisplayExtenderPluginBase {
         }
 
         $form['important'] = [
-          '#theme' => 'views_view_theme_suggestions_important',
+          '#theme' => 'dut_views_theme_suggestions_important',
         ];
 
         if (isset($this->displayHandler->display['new_id'])) {
           $form['important-new_id'] = [
-            '#theme' => 'views_view_theme_suggestions_important_new_id',
+            '#theme' => 'dut_views_theme_suggestions_important_new_id',
           ];
         }
 
+        $options = [];
+        foreach ($themes as $key => $theme) {
+          if (!empty($theme->info['hidden'])) {
+            continue;
+          }
+          $options[$key] = $theme->info['name'];
+        }
+
+        $form['box'] = [
+          '#prefix' => '<div class="container-inline">',
+          '#suffix' => '</div>',
+        ];
+        $form['box']['theme'] = [
+          '#type' => 'select',
+          '#options' => $options,
+          '#default_value' => $this->theme,
+        ];
+
+        $form['box']['change'] = [
+          '#type' => 'submit',
+          '#value' => t('Change theme'),
+          '#submit' => [
+            [$this, 'changeTheme'],
+          ],
+        ];
+
         $form['suggestions'] = [
-          '#theme' => 'views_view_theme_suggestions',
+          '#theme' => 'dut_views_theme_suggestions',
           '#suggestions' => $suggestions_list,
+        ];
+
+        $form['rescan'] = [
+          '#prefix' => '<div class="form-item">',
+          '#suffix' => '</div>',
+        ];
+        $form['rescan']['button'] = [
+          '#type' => 'submit',
+          '#value' => $this->t('Rescan template files'),
+          '#submit' => [
+            [$this, 'rescanTemplateFiles'],
+          ],
+        ];
+        $form['rescan']['description'] = [
+          '#theme' => 'dut_views_theme_suggestions_rescan_description',
         ];
         break;
 
@@ -150,12 +242,12 @@ class ThemeSuggestionsDisplayExtender extends DisplayExtenderPluginBase {
           }
         }
 
-        $form['analysis'] = array(
-          '#theme' => 'views_view_theme_suggestion_theme_template',
+        $form['analysis'] = [
+          '#theme' => 'dut_views_theme_suggestion_theme_template',
           '#type' => $plugin_type,
           '#link' => $back_link,
           '#contents' => $contents,
-        );
+        ];
         break;
     }
   }
@@ -181,7 +273,7 @@ class ThemeSuggestionsDisplayExtender extends DisplayExtenderPluginBase {
     $group_link = Link::fromTextAndUrl(t($group), $this->createFormDisplayRouteLink($type));
 
     return [
-      '#theme' => 'views_view_theme_suggestion',
+      '#theme' => 'dut_views_theme_suggestion',
       '#type' => $plugin_type,
       '#link' => $group_link,
       '#suggestions' => $this->formatThemes($suggestions),
@@ -221,6 +313,46 @@ class ThemeSuggestionsDisplayExtender extends DisplayExtenderPluginBase {
     }
 
     return array_reverse($fixed);
+  }
+
+  /**
+   * Override handler for views_ui_edit_display_form
+   */
+  public static function changeTheme(array $form, FormStateInterface $form_state) {
+    // This is just a temporary variable.
+    $storage = $form_state->getStorage();
+    if (!empty($storage['view'])) {
+      $view = &$storage['view'];
+      /** @var \Drupal\views_ui\ViewUI $view */
+      $view->theme = $form_state->getValue('theme');
+      $view->cacheSet();
+
+      $form_state->setStorage($storage);
+      $form_state->set('rerender', TRUE);
+      $form_state->setRebuild();
+    }
+  }
+
+  /**
+   * Submit hook to clear Drupal's theme registry (thereby triggering
+   * a templates rescan).
+   */
+  public static function rescanTemplateFiles(array $form, FormStateInterface $form_state) {
+    $theme = $form_state->getValue('theme');
+    drupal_theme_rebuild();
+
+    // The 'Theme: Information' page is about to be shown again. That page
+    // analyzes the output of theme_get_registry(). However, this latter
+    // function uses an internal cache (which was initialized before we
+    // called drupal_theme_rebuild()) so it won't reflect the
+    // current state of our theme registry. The only way to clear that cache
+    // is to re-initialize the theme system:
+    unset($GLOBALS['theme']);
+    $theme_init = \Drupal::service('theme.initialization');
+    $theme_init->initTheme($theme);
+
+    $form_state->set('rerender', TRUE);
+    $form_state->setRebuild();
   }
 
 }

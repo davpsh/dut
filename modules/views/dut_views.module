@@ -4,60 +4,51 @@
  * Implements hook_theme().
  */
 function dut_views_theme($existing, $type, $theme, $path) {
-  $theme_suggestions_path = implode('/', [
-    $path, 'templates', 'views-view-theme-suggestions'
-  ]);
   return [
-    'views_view_theme_suggestions' => [
-      'path' => $theme_suggestions_path,
+    'dut_views_theme_suggestions' => [
       'variables' => [
         'suggestions' => []
       ],
     ],
-    'views_view_theme_suggestion' => [
-      'path' => $theme_suggestions_path,
+    'dut_views_theme_suggestion' => [
       'variables' => [
         'type' => NULL,
         'link' => NULL,
         'suggestions' => [],
       ],
     ],
-    'views_view_theme_suggestion_theme_template' => [
-      'path' => $theme_suggestions_path,
+    'dut_views_theme_suggestion_theme_template' => [
       'variables' => [
         'type' => NULL,
         'link' => NULL,
         'contents' => [],
       ],
     ],
-    'views_view_theme_suggestions_important' => [
-      'path' => $theme_suggestions_path,
+    'dut_views_theme_suggestions_important' => [
       'variables' => [],
     ],
-    'views_view_theme_suggestions_important_new_id' => [
-      'path' => $theme_suggestions_path,
+    'dut_views_theme_suggestions_important_new_id' => [
+      'variables' => [],
+    ],
+    'dut_views_theme_suggestions_rescan_description' => [
       'variables' => [],
     ],
   ];
 }
 
 /**
- * Implements hook_theme_suggestions_HOOK().
+ * Implements hook_theme_suggestions_alter().
  */
-function dut_views_theme_suggestions_views_view(array $variables) {
-  $original_hook_theme = $variables['theme_hook_original'];
-  $suggestions = $variables['theme_hook_suggestions'];
-  /** @var \Drupal\views\ViewExecutable $view */
-  $view = $variables['view'];
-  if (empty($suggestions)) {
-    $suggestions = $view->buildThemeFunctions($original_hook_theme);
-    $index = array_search($original_hook_theme, $suggestions);
+function dut_views_theme_suggestions_alter(array &$suggestions, array $variables, $hook) {
+  if (strpos($hook, 'views_view') !== FALSE && empty($suggestions)) {
+    /** @var \Drupal\views\ViewExecutable $view */
+    $view = $variables['view'];
+    $suggestions = $view->buildThemeFunctions($hook);
+    $index = array_search($hook, $suggestions);
     if ($index !== FALSE) {
       unset($suggestions[$index]);
     }
 
     $suggestions = array_reverse($suggestions);
   }
-
-  return $suggestions;
 }
