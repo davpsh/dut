@@ -1,0 +1,12 @@
+{% if suggestions|length > 0 and link %}
+  {% set print = [] %}
+  {% for suggestion in suggestions %}
+    {% if suggestion.path %}
+      {% set hint = suggestion.exists ? 'File found in folder @template-path' : 'File not found, in folder @template-path' %}
+      {% set print = print|merge(['<strong title="' ~ hint|t({'@template-path': suggestion.path}) ~ '">' ~ suggestion.template ~ '</strong>']) %}
+    {% else %}
+      {% set print = print|merge([suggestion.template]) %}
+    {% endif %}
+  {% endfor %}
+  <li>{{ link }}: {{ print|join(', ')|raw }}</li>
+{% endif %}
