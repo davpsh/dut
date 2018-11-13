@@ -30,7 +30,7 @@ function dut_views_theme($existing, $type, $theme, $path) {
  */
 function dut_views_theme_suggestions_views_view(array $variables) {
   $original_hook_theme = $variables['theme_hook_original'];
-  $suggestions = $variables['theme_hook_suggestions'];
+  $suggestions = $variables['theme_hook_suggestions'] ?? [];
   /** @var \Drupal\views\ViewExecutable $view */
   $view = $variables['view'];
   if (empty($suggestions)) {
